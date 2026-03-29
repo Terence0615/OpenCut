@@ -56,6 +56,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 					try {
 						const newProjectId = await editor.project.createNewProject({
 							name: "Untitled Project",
+							id: projectId,
 						});
 						router.replace(`/editor/${newProjectId}`);
 					} catch (_createErr) {

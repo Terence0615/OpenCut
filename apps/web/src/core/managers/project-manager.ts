@@ -79,11 +79,18 @@ export class ProjectManager {
 		await this.storageMigrationPromise;
 	}
 
-	async createNewProject({ name }: { name: string }): Promise<string> {
+	async createNewProject({
+		name,
+		id: presetId,
+	}: {
+		name: string;
+		/** 若指定（如 Medusa iframe URL 中的 /editor/{id}），则使用该 UUID 创建项目以便与外部系统对齐 */
+		id?: string;
+	}): Promise<string> {
 		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
 		const newProject: TProject = {
 			metadata: {
-				id: generateUUID(),
+				id: presetId ?? generateUUID(),
 				name,
 				duration: getProjectDurationFromScenes({ scenes: [mainScene] }),
 				createdAt: new Date(),
