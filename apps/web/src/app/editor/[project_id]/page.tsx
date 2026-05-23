@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import {
 	ResizablePanelGroup,
 	ResizablePanel,
@@ -34,27 +34,38 @@ import {
 	bookmarkNotesPreviewOverlay,
 	getBookmarkPreviewOverlaySource,
 } from "@/timeline/bookmarks/index";
+import { isMedusaEmbedMode } from "@/medusa-bridge";
+import { useMedusaBridge } from "@/hooks/use-medusa-bridge";
 
 export default function Editor() {
 	const params = useParams();
+	const searchParams = useSearchParams();
 	const projectId = params.project_id as string;
+	const embed =
+		searchParams.get("embed") === "true" || isMedusaEmbedMode();
 
 	return (
 		<MobileGate>
 			<EditorProvider projectId={projectId}>
+				<MedusaBridgeHost projectId={projectId} />
 				<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
-					<DegradedRendererBanner />
-					<EditorHeader />
+					{!embed && <DegradedRendererBanner />}
+					{!embed && <EditorHeader />}
 					<div className="min-h-0 min-w-0 flex-1">
-						<EditorLayout />
+						<EditorLayout embed={embed} />
 					</div>
-					<Onboarding />
-					<MigrationDialog />
-					<ChangelogNotification />
+					{!embed && <Onboarding />}
+					{!embed && <MigrationDialog />}
+					{!embed && <ChangelogNotification />}
 				</div>
 			</EditorProvider>
 		</MobileGate>
 	);
+}
+
+function MedusaBridgeHost({ projectId }: { projectId: string }) {
+	useMedusaBridge({ projectId });
+	return null;
 }
 
 function DegradedRendererBanner() {
@@ -78,7 +89,7 @@ function DegradedRendererBanner() {
 	);
 }
 
-function EditorLayout() {
+function EditorLayout({ embed = false }: { embed?: boolean }) {
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
 	const activeScene = useEditor((editor) =>
@@ -146,52 +157,70 @@ function EditorLayout() {
 				maxSize={85}
 				className="min-h-0"
 			>
-				<ResizablePanelGroup
-					direction="horizontal"
-					className="size-full gap-[0.19rem] px-3"
-					onLayout={(sizes) => {
-						setPanel({ panel: "tools", size: sizes[0] ?? panels.tools });
-						setPanel({ panel: "preview", size: sizes[1] ?? panels.preview });
-						setPanel({
-							panel: "properties",
-							size: sizes[2] ?? panels.properties,
-						});
-					}}
-				>
-					<ResizablePanel
-						defaultSize={panels.tools}
-						minSize={15}
-						maxSize={40}
-						className="min-w-0"
+				{embed ? (
+					<div className="flex size-full min-h-0 flex-col gap-[0.19rem] px-3">
+						<div className="min-h-0 min-w-0 flex-1">
+							<PreviewPanel
+								overlayControls={overlayControls}
+								overlayInstances={overlaySource.instances}
+								onOverlayVisibilityChange={setOverlayVisibility}
+							/>
+						</div>
+						<div className="min-h-0 shrink-0">
+							<PropertiesPanel />
+						</div>
+					</div>
+				) : (
+					<ResizablePanelGroup
+						direction="horizontal"
+						className="size-full gap-[0.19rem] px-3"
+						onLayout={(sizes) => {
+							setPanel({ panel: "tools", size: sizes[0] ?? panels.tools });
+							setPanel({
+								panel: "preview",
+								size: sizes[1] ?? panels.preview,
+							});
+							setPanel({
+								panel: "properties",
+								size: sizes[2] ?? panels.properties,
+							});
+						}}
 					>
-						<AssetsPanel />
-					</ResizablePanel>
+						<ResizablePanel
+							defaultSize={panels.tools}
+							minSize={15}
+							maxSize={40}
+							className="min-w-0"
+						>
+							<AssetsPanel />
+						</ResizablePanel>
 
-					<ResizableHandle withHandle />
+						<ResizableHandle withHandle />
 
-					<ResizablePanel
-						defaultSize={panels.preview}
-						minSize={30}
-						className="min-h-0 min-w-0 flex-1"
-					>
-						<PreviewPanel
-							overlayControls={overlayControls}
-							overlayInstances={overlaySource.instances}
-							onOverlayVisibilityChange={setOverlayVisibility}
-						/>
-					</ResizablePanel>
+						<ResizablePanel
+							defaultSize={panels.preview}
+							minSize={30}
+							className="min-h-0 min-w-0 flex-1"
+						>
+							<PreviewPanel
+								overlayControls={overlayControls}
+								overlayInstances={overlaySource.instances}
+								onOverlayVisibilityChange={setOverlayVisibility}
+							/>
+						</ResizablePanel>
 
-					<ResizableHandle withHandle />
+						<ResizableHandle withHandle />
 
-					<ResizablePanel
-						defaultSize={panels.properties}
-						minSize={15}
-						maxSize={40}
-						className="min-w-0"
-					>
-						<PropertiesPanel />
-					</ResizablePanel>
-				</ResizablePanelGroup>
+						<ResizablePanel
+							defaultSize={panels.properties}
+							minSize={15}
+							maxSize={40}
+							className="min-w-0"
+						>
+							<PropertiesPanel />
+						</ResizablePanel>
+					</ResizablePanelGroup>
+				)}
 			</ResizablePanel>
 
 			<ResizableHandle withHandle />
