@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { BasePage } from "@/app/base-page";
 import { Separator } from "@/components/ui/separator";
-import { getPosts } from "@/lib/blog/query";
-import type { Post } from "@/types/blog";
+import { getPosts } from "@/blog/query";
+import type { Post } from "@/blog/types";
 
 export const metadata: Metadata = {
 	title: "Blog - OpenCut",
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 export default async function BlogPage() {
-	const data = await getPosts();
+	const data = await getPosts().catch(() => null);
 	if (!data || !data.posts) return <div>No posts yet</div>;
 
 	return (

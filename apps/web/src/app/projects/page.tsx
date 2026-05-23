@@ -6,20 +6,22 @@ import { useRouter } from "next/navigation";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { MigrationDialog } from "@/components/editor/dialogs/migration-dialog";
+import type { EditorCore } from "@/core";
+import { MigrationDialog } from "@/project/components/migration-dialog";
+import { StoragePersistenceDialog } from "@/services/storage/components/storage-persistence-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEditor } from "@/hooks/use-editor";
+import { useEditor } from "@/editor/use-editor";
 import { useProjectsStore } from "./store";
 import type {
 	TProjectMetadata,
 	TProjectSortKey,
 	TProjectSortOption,
-} from "@/types/project";
-import { formatTimeCode } from "@/lib/time";
+} from "@/project/types";
+import { formatTimecode, mediaTimeToSeconds } from "opencut-wasm";
 import { formatDate } from "@/utils/date";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -44,7 +46,7 @@ import {
 	ArrowDown02Icon,
 	InformationCircleIcon,
 } from "@hugeicons/core-free-icons";
-import { OcVideoIcon } from "@opencut/ui/icons";
+import { OcVideoIcon } from "@/components/icons";
 import { Label } from "@/components/ui/label";
 import {
 	ContextMenu,
@@ -60,11 +62,11 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DeleteProjectDialog } from "@/components/editor/dialogs/delete-project-dialog";
-import { ProjectInfoDialog } from "@/components/editor/dialogs/project-info-dialog";
-import { RenameProjectDialog } from "@/components/editor/dialogs/rename-project-dialog";
+import { DeleteProjectDialog } from "@/project/components/delete-project-dialog";
+import { ProjectInfoDialog } from "@/project/components/project-info-dialog";
+import { RenameProjectDialog } from "@/project/components/rename-project-dialog";
 import { cn } from "@/utils/ui";
-
+import { ChangelogNotification } from "@/changelog/components/changelog-notification";
 const formatProjectDuration = ({
 	duration,
 }: {
@@ -74,8 +76,9 @@ const formatProjectDuration = ({
 		return null;
 	}
 
-	const format = duration >= 3600 ? "HH:MM:SS" : "MM:SS";
-	return formatTimeCode({ timeInSeconds: duration, format });
+	const durationSeconds = mediaTimeToSeconds({ time: duration });
+	const format = durationSeconds >= 3600 ? "HH:MM:SS" : "MM:SS";
+	return formatTimecode({ time: duration, format }) ?? "";
 };
 
 const VIEW_MODE_OPTIONS = [
@@ -86,6 +89,13 @@ const VIEW_MODE_OPTIONS = [
 export default function ProjectsPage() {
 	const { searchQuery, sortKey, sortOrder, viewMode } = useProjectsStore();
 	const editor = useEditor();
+	const sortOption: TProjectSortOption = `${sortKey}-${sortOrder}`;
+
+	const isLoading = useEditor((e) => e.project.getIsLoading());
+	const isInitialized = useEditor((e) => e.project.getIsInitialized());
+	const projectsToDisplay = useEditor((e) =>
+		e.project.getFilteredAndSortedProjects({ searchQuery, sortOption }),
+	);
 
 	useEffect(() => {
 		if (!editor.project.getIsInitialized()) {
@@ -93,18 +103,11 @@ export default function ProjectsPage() {
 		}
 	}, [editor.project]);
 
-	const sortOption: TProjectSortOption = `${sortKey}-${sortOrder}`;
-	const projectsToDisplay = editor.project.getFilteredAndSortedProjects({
-		searchQuery,
-		sortOption,
-	});
-
-	const isLoading = editor.project.getIsLoading();
-	const isInitialized = editor.project.getIsInitialized();
-
 	return (
 		<div className="bg-background min-h-screen">
 			<MigrationDialog />
+			<StoragePersistenceDialog />
+			<ChangelogNotification />
 			<ProjectsHeader />
 			<ProjectsToolbar projectIds={projectsToDisplay.map((p) => p.id)} />
 			<main className="mx-auto px-4 pt-2 pb-6 flex flex-col gap-4">
@@ -359,7 +362,7 @@ async function deleteProjects({
 	editor,
 	ids,
 }: {
-	editor: ReturnType<typeof useEditor>;
+	editor: EditorCore;
 	ids: string[];
 }) {
 	await editor.project.deleteProjects({ ids });
@@ -369,7 +372,7 @@ async function duplicateProjects({
 	editor,
 	ids,
 }: {
-	editor: ReturnType<typeof useEditor>;
+	editor: EditorCore;
 	ids: string[];
 }) {
 	await editor.project.duplicateProjects({ ids });
@@ -380,7 +383,7 @@ async function renameProject({
 	id,
 	name,
 }: {
-	editor: ReturnType<typeof useEditor>;
+	editor: EditorCore;
 	id: string;
 	name: string;
 }) {

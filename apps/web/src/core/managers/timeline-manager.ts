@@ -1,57 +1,79 @@
 import type { EditorCore } from "@/core";
-import type { EffectParamValues } from "@/types/effects";
+import type { ElementBounds } from "@/preview/element-bounds";
+import type { ParamValues } from "@/params";
 import type {
+	SceneTracks,
 	TrackType,
 	TimelineTrack,
 	TimelineElement,
-	ClipboardItem,
-} from "@/types/timeline";
+	RetimeConfig,
+} from "@/timeline";
+import { calculateTotalDuration } from "@/timeline";
+import { TimelineDragSource } from "@/timeline/drag-source";
+import { findTrackInSceneTracks } from "@/timeline/track-element-update";
+import { lastFrameMediaTime, type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
+import {
+	canElementBeHidden,
+	canElementHaveAudio,
+} from "@/timeline/element-utils";
+import { isElementMuted } from "@/timeline/audio-state";
 import type {
+	AnimationPath,
 	AnimationInterpolation,
-	AnimationPropertyPath,
-	AnimationValue,
-} from "@/types/animation";
-import { calculateTotalDuration } from "@/lib/timeline";
+	ScalarCurveKeyframePatch,
+} from "@/animation/types";
+import type { ParamValue } from "@/params";
+import {
+	getElementLocalTime,
+	resolveAnimationPathValueAtTime,
+} from "@/animation";
+import { resolveAnimationTarget } from "@/timeline/animation-targets";
+import { BatchCommand } from "@/commands";
 import {
 	AddTrackCommand,
 	RemoveTrackCommand,
 	ToggleTrackMuteCommand,
 	ToggleTrackVisibilityCommand,
 	InsertElementCommand,
-	UpdateElementTrimCommand,
-	UpdateElementDurationCommand,
 	DeleteElementsCommand,
 	DuplicateElementsCommand,
-	ToggleElementsVisibilityCommand,
-	ToggleElementsMutedCommand,
-	UpdateElementCommand,
+	UpdateElementsCommand,
 	SplitElementsCommand,
-	PasteCommand,
-	UpdateElementStartTimeCommand,
 	MoveElementCommand,
 	TracksSnapshotCommand,
 	UpsertKeyframeCommand,
 	RemoveKeyframeCommand,
 	RetimeKeyframeCommand,
+	UpdateScalarKeyframeCurveCommand,
 	AddClipEffectCommand,
+	DeleteFreeformPathMaskPointsCommand,
+	InsertFreeformPathMaskPointCommand,
 	RemoveClipEffectCommand,
 	UpdateClipEffectParamsCommand,
 	ToggleClipEffectCommand,
 	ReorderClipEffectsCommand,
+	RemoveMaskCommand,
+	ToggleMaskInvertedCommand,
 	UpsertEffectParamKeyframeCommand,
 	RemoveEffectParamKeyframeCommand,
-} from "@/lib/commands/timeline";
-import { BatchCommand, PreviewTracker } from "@/lib/commands";
-import type { InsertElementParams } from "@/lib/commands/timeline/element/insert-element";
+	ToggleSourceAudioSeparationCommand,
+} from "@/commands/timeline";
+import type { InsertElementParams } from "@/commands/timeline/element/insert-element";
+import type {
+	PlannedElementMove,
+	PlannedTrackCreation,
+} from "@/timeline/group-move";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
-	private previewTracker = new PreviewTracker<TimelineTrack[]>();
+	private previewOverlay = new Map<string, Partial<TimelineElement>>();
+	private previewTracks: SceneTracks | null = null;
+	public readonly dragSource = new TimelineDragSource();
 
 	constructor(private editor: EditorCore) {}
 
 	addTrack({ type, index }: { type: TrackType; index?: number }): string {
-		const command = new AddTrackCommand(type, index);
+		const command = new AddTrackCommand({ type, index });
 		this.editor.command.execute({ command });
 		return command.getTrackId();
 	}
@@ -73,90 +95,81 @@ export class TimelineManager {
 		startTime,
 		duration,
 		pushHistory = true,
-		rippleEnabled = false,
 	}: {
 		elementId: string;
-		trimStart: number;
-		trimEnd: number;
-		startTime?: number;
-		duration?: number;
+		trimStart: MediaTime;
+		trimEnd: MediaTime;
+		startTime?: MediaTime;
+		duration?: MediaTime;
 		pushHistory?: boolean;
-		rippleEnabled?: boolean;
 	}): void {
-		const command = new UpdateElementTrimCommand({
-			elementId,
+		const trackId = this.findTrackIdForElement({ elementId });
+		if (!trackId) {
+			return;
+		}
+
+		const nextUpdates: Partial<TimelineElement> = {
 			trimStart,
 			trimEnd,
-			startTime,
-			duration,
-			rippleEnabled,
-		});
-		if (pushHistory) {
-			this.editor.command.execute({ command });
-		} else {
-			command.execute();
+		};
+		if (startTime !== undefined) {
+			nextUpdates.startTime = startTime;
 		}
+		if (duration !== undefined) {
+			nextUpdates.duration = duration;
+		}
+
+		this.updateElements({
+			updates: [
+				{
+					trackId,
+					elementId,
+					patch: nextUpdates,
+				},
+			],
+			pushHistory,
+		});
 	}
 
-	updateElementDuration({
+	updateElementRetime({
 		trackId,
 		elementId,
-		duration,
+		retime,
 		pushHistory = true,
 	}: {
 		trackId: string;
 		elementId: string;
-		duration: number;
+		retime?: RetimeConfig;
 		pushHistory?: boolean;
 	}): void {
-		const command = new UpdateElementDurationCommand({
-			trackId,
-			elementId,
-			duration,
+		this.updateElements({
+			updates: [
+				{
+					trackId,
+					elementId,
+					patch: {
+						retime,
+					},
+				},
+			],
+			pushHistory,
 		});
-		if (pushHistory) {
-			this.editor.command.execute({ command });
-		} else {
-			command.execute();
+	}
+
+	moveElements({
+		moves,
+		createTracks,
+	}: {
+		moves: PlannedElementMove[];
+		createTracks?: PlannedTrackCreation[];
+	}): void {
+		if (moves.length === 0) {
+			return;
 		}
-	}
 
-	updateElementStartTime({
-		elements,
-		startTime,
-	}: {
-		elements: { trackId: string; elementId: string }[];
-		startTime: number;
-	}): void {
-		const command = new UpdateElementStartTimeCommand({
-			elements,
-			startTime,
-		});
-		this.editor.command.execute({ command });
-	}
-
-	moveElement({
-		sourceTrackId,
-		targetTrackId,
-		elementId,
-		newStartTime,
-		createTrack,
-		rippleEnabled = false,
-	}: {
-		sourceTrackId: string;
-		targetTrackId: string;
-		elementId: string;
-		newStartTime: number;
-		createTrack?: { type: TrackType; index: number };
-		rippleEnabled?: boolean;
-	}): void {
 		const command = new MoveElementCommand({
-			sourceTrackId,
-			targetTrackId,
-			elementId,
-			newStartTime,
-			createTrack,
-			rippleEnabled,
+			moves,
+			createTracks,
 		});
 		this.editor.command.execute({ command });
 	}
@@ -175,29 +188,43 @@ export class TimelineManager {
 		elements,
 		splitTime,
 		retainSide = "both",
-		rippleEnabled = false,
 	}: {
 		elements: { trackId: string; elementId: string }[];
-		splitTime: number;
+		splitTime: MediaTime;
 		retainSide?: "both" | "left" | "right";
-		rippleEnabled?: boolean;
 	}): { trackId: string; elementId: string }[] {
 		const command = new SplitElementsCommand({
 			elements,
 			splitTime,
 			retainSide,
-			rippleEnabled,
 		});
 		this.editor.command.execute({ command });
 		return command.getRightSideElements();
 	}
 
-	getTotalDuration(): number {
-		return calculateTotalDuration({ tracks: this.getTracks() });
+	getTotalDuration(): MediaTime {
+		const activeScene = this.editor.scenes.getActiveSceneOrNull();
+		if (!activeScene) {
+			return ZERO_MEDIA_TIME;
+		}
+
+		return calculateTotalDuration({ tracks: activeScene.tracks });
+	}
+
+	getLastFrameTime(): MediaTime {
+		const duration = this.getTotalDuration();
+		const fps = this.editor.project.getActive()?.settings.fps;
+		if (!fps || duration <= 0) return duration;
+		return lastFrameMediaTime({ duration, fps });
 	}
 
 	getTrackById({ trackId }: { trackId: string }): TimelineTrack | null {
-		return this.getTracks().find((track) => track.id === trackId) ?? null;
+		const activeScene = this.editor.scenes.getActiveSceneOrNull();
+		if (!activeScene) {
+			return null;
+		}
+
+		return findTrackInSceneTracks({ tracks: activeScene.tracks, trackId });
 	}
 
 	getElementsWithTracks({
@@ -222,26 +249,26 @@ export class TimelineManager {
 		return result;
 	}
 
-	pasteAtTime({
-		time,
-		clipboardItems,
-	}: {
-		time: number;
-		clipboardItems: ClipboardItem[];
-	}): { trackId: string; elementId: string }[] {
-		const command = new PasteCommand(time, clipboardItems);
-		this.editor.command.execute({ command });
-		return command.getPastedElements();
-	}
-
 	deleteElements({
 		elements,
-		rippleEnabled = false,
 	}: {
 		elements: { trackId: string; elementId: string }[];
-		rippleEnabled?: boolean;
 	}): void {
-		const command = new DeleteElementsCommand({ elements, rippleEnabled });
+		const command = new DeleteElementsCommand({ elements });
+		this.editor.command.execute({ command });
+	}
+
+	toggleSourceAudioSeparation({
+		trackId,
+		elementId,
+	}: {
+		trackId: string;
+		elementId: string;
+	}): void {
+		const command = new ToggleSourceAudioSeparationCommand({
+			trackId,
+			elementId,
+		});
 		this.editor.command.execute({ command });
 	}
 
@@ -252,20 +279,17 @@ export class TimelineManager {
 		updates: Array<{
 			trackId: string;
 			elementId: string;
-			updates: Partial<TimelineElement>;
+			patch: Partial<TimelineElement>;
 		}>;
 		pushHistory?: boolean;
 	}): void {
-		const commands = updates.map(
-			({ trackId, elementId, updates: elementUpdates }) =>
-				new UpdateElementCommand({
-					trackId,
-					elementId,
-					updates: elementUpdates,
-				}),
-		);
-		const command =
-			commands.length === 1 ? commands[0] : new BatchCommand(commands);
+		if (updates.length === 0) {
+			return;
+		}
+
+		const command = new UpdateElementsCommand({
+			updates,
+		});
 		if (pushHistory) {
 			this.editor.command.execute({ command });
 		} else {
@@ -308,6 +332,72 @@ export class TimelineManager {
 		this.editor.command.execute({ command });
 	}
 
+	removeMask({
+		trackId,
+		elementId,
+		maskId,
+	}: {
+		trackId: string;
+		elementId: string;
+		maskId: string;
+	}): void {
+		const command = new RemoveMaskCommand({
+			trackId,
+			elementId,
+			maskId,
+		});
+		this.editor.command.execute({ command });
+	}
+
+	deleteFreeformPathMaskPoints({
+		trackId,
+		elementId,
+		maskId,
+		pointIds,
+	}: {
+		trackId: string;
+		elementId: string;
+		maskId: string;
+		pointIds: string[];
+	}): void {
+		if (pointIds.length === 0) {
+			return;
+		}
+		const command = new DeleteFreeformPathMaskPointsCommand({
+			trackId,
+			elementId,
+			maskId,
+			pointIds,
+		});
+		this.editor.command.execute({ command });
+	}
+
+	insertFreeformPathMaskPoint({
+		trackId,
+		elementId,
+		maskId,
+		segmentIndex,
+		canvasPoint,
+		bounds,
+	}: {
+		trackId: string;
+		elementId: string;
+		maskId: string;
+		segmentIndex: number;
+		canvasPoint: { x: number; y: number };
+		bounds: ElementBounds;
+	}): void {
+		const command = new InsertFreeformPathMaskPointCommand({
+			trackId,
+			elementId,
+			maskId,
+			segmentIndex,
+			canvasPoint,
+			bounds,
+		});
+		this.editor.command.execute({ command });
+	}
+
 	updateClipEffectParams({
 		trackId,
 		elementId,
@@ -318,7 +408,7 @@ export class TimelineManager {
 		trackId: string;
 		elementId: string;
 		effectId: string;
-		params: Partial<EffectParamValues>;
+		params: Partial<ParamValues>;
 		pushHistory?: boolean;
 	}): void {
 		const command = new UpdateClipEffectParamsCommand({
@@ -351,6 +441,23 @@ export class TimelineManager {
 		this.editor.command.execute({ command });
 	}
 
+	toggleMaskInverted({
+		trackId,
+		elementId,
+		maskId,
+	}: {
+		trackId: string;
+		elementId: string;
+		maskId: string;
+	}): void {
+		const command = new ToggleMaskInvertedCommand({
+			trackId,
+			elementId,
+			maskId,
+		});
+		this.editor.command.execute({ command });
+	}
+
 	reorderClipEffects({
 		trackId,
 		elementId,
@@ -377,9 +484,9 @@ export class TimelineManager {
 		keyframes: Array<{
 			trackId: string;
 			elementId: string;
-			propertyPath: AnimationPropertyPath;
-			time: number;
-			value: AnimationValue;
+			propertyPath: AnimationPath;
+			time: MediaTime;
+			value: ParamValue;
 			interpolation?: AnimationInterpolation;
 			keyframeId?: string;
 		}>;
@@ -419,12 +526,51 @@ export class TimelineManager {
 		keyframes: Array<{
 			trackId: string;
 			elementId: string;
-			propertyPath: AnimationPropertyPath;
+			propertyPath: AnimationPath;
 			keyframeId: string;
 		}>;
 	}): void {
 		if (keyframes.length === 0) {
 			return;
+		}
+
+		// Pre-sample values at playhead for each (element, property) pair.
+		// This preserves "what you see is what you get" when all keyframes are deleted.
+		const playheadTime = this.editor.playback.getCurrentTime();
+		const valueAtPlayheadMap = new Map<string, ParamValue | null>();
+
+		for (const { trackId, elementId, propertyPath } of keyframes) {
+			const key = `${elementId}:${propertyPath}`;
+			if (valueAtPlayheadMap.has(key)) {
+				continue;
+			}
+
+			const element = this.getElementByRef({ trackId, elementId });
+			if (!element) {
+				valueAtPlayheadMap.set(key, null);
+				continue;
+			}
+
+			const localTime = getElementLocalTime({
+				timelineTime: playheadTime,
+				elementStartTime: element.startTime,
+				elementDuration: element.duration,
+			});
+
+			const target = resolveAnimationTarget({ element, path: propertyPath });
+			const baseValue = target?.getBaseValue() ?? null;
+			if (baseValue === null) {
+				valueAtPlayheadMap.set(key, null);
+				continue;
+			}
+
+			const value = resolveAnimationPathValueAtTime({
+				animations: element.animations,
+				propertyPath,
+				localTime,
+				fallbackValue: baseValue,
+			});
+			valueAtPlayheadMap.set(key, value);
 		}
 
 		const commands = keyframes.map(
@@ -434,6 +580,8 @@ export class TimelineManager {
 					elementId,
 					propertyPath,
 					keyframeId,
+					valueAtPlayhead:
+						valueAtPlayheadMap.get(`${elementId}:${propertyPath}`) ?? null,
 				}),
 		);
 		const command =
@@ -450,9 +598,9 @@ export class TimelineManager {
 	}: {
 		trackId: string;
 		elementId: string;
-		propertyPath: AnimationPropertyPath;
+		propertyPath: AnimationPath;
 		keyframeId: string;
-		time: number;
+		time: MediaTime;
 	}): void {
 		const command = new RetimeKeyframeCommand({
 			trackId,
@@ -461,6 +609,38 @@ export class TimelineManager {
 			keyframeId,
 			nextTime: time,
 		});
+		this.editor.command.execute({ command });
+	}
+
+	updateKeyframeCurves({
+		keyframes,
+	}: {
+		keyframes: Array<{
+			trackId: string;
+			elementId: string;
+			propertyPath: AnimationPath;
+			componentKey: string;
+			keyframeId: string;
+			patch: ScalarCurveKeyframePatch;
+		}>;
+	}): void {
+		if (keyframes.length === 0) {
+			return;
+		}
+
+		const commands = keyframes.map(
+			({ trackId, elementId, propertyPath, componentKey, keyframeId, patch }) =>
+				new UpdateScalarKeyframeCurveCommand({
+					trackId,
+					elementId,
+					propertyPath,
+					componentKey,
+					keyframeId,
+					patch,
+				}),
+		);
+		const command =
+			commands.length === 1 ? commands[0] : new BatchCommand(commands);
 		this.editor.command.execute({ command });
 	}
 
@@ -478,7 +658,7 @@ export class TimelineManager {
 		elementId: string;
 		effectId: string;
 		paramKey: string;
-		time: number;
+		time: MediaTime;
 		value: number;
 		interpolation?: "linear" | "hold";
 		keyframeId?: string;
@@ -520,49 +700,100 @@ export class TimelineManager {
 	}
 
 	isPreviewActive(): boolean {
-		return this.previewTracker.isActive();
+		return this.previewOverlay.size > 0;
 	}
 
 	previewElements({
 		updates,
 	}: {
-		updates: Array<{
+		updates: readonly {
 			trackId: string;
 			elementId: string;
 			updates: Partial<TimelineElement>;
-		}>;
+		}[];
 	}): void {
-		const tracks = this.getTracks();
-		this.previewTracker.begin({ state: tracks });
-
-		let updatedTracks = tracks;
-		for (const { trackId, elementId, updates: elementUpdates } of updates) {
-			updatedTracks = updatedTracks.map((track) => {
-				if (track.id !== trackId) return track;
-				const newElements = track.elements.map((element) =>
-					element.id === elementId
-						? { ...element, ...elementUpdates }
-						: element,
+		let changedOverlayCount = 0;
+		for (const { elementId, updates: elementUpdates } of updates) {
+			const existingOverlay = this.previewOverlay.get(elementId);
+			const changed = Object.entries(elementUpdates).some(([key, value]) => {
+				return !Object.is(
+					existingOverlay?.[key as keyof TimelineElement],
+					value,
 				);
-				return { ...track, elements: newElements } as TimelineTrack;
 			});
+			if (changed) {
+				changedOverlayCount += 1;
+				const mergedOverlay = {
+					...existingOverlay,
+					...elementUpdates,
+				} as Partial<TimelineElement>;
+				this.previewOverlay.set(elementId, mergedOverlay);
+			}
 		}
-		this.updateTracks(updatedTracks);
+		const committedTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		if (!committedTracks) {
+			return;
+		}
+		if (changedOverlayCount === 0) {
+			return;
+		}
+		this.previewTracks = this.applyPreviewOverlay(committedTracks);
+		this.notify();
 	}
 
 	commitPreview(): void {
-		const snapshot = this.previewTracker.end();
-		if (snapshot === null) return;
-		const currentTracks = this.getTracks();
-		const command = new TracksSnapshotCommand(snapshot, currentTracks);
+		if (this.previewOverlay.size === 0) return;
+		const committedTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		if (!committedTracks) {
+			return;
+		}
+		const afterTracks =
+			this.previewTracks ?? this.applyPreviewOverlay(committedTracks);
+		const command = new TracksSnapshotCommand({
+			before: committedTracks,
+			after: afterTracks,
+		});
 		this.editor.command.push({ command });
+		this.previewOverlay.clear();
+		this.previewTracks = null;
+		this.updateTracks(afterTracks);
 	}
 
 	discardPreview(): void {
-		const snapshot = this.previewTracker.end();
-		if (snapshot !== null) {
-			this.updateTracks(snapshot);
-		}
+		if (this.previewOverlay.size === 0) return;
+		this.previewOverlay.clear();
+		this.previewTracks = null;
+		this.notify();
+	}
+
+	private applyPreviewOverlay(tracks: SceneTracks): SceneTracks {
+		if (this.previewOverlay.size === 0) return tracks;
+
+		const applyTrackOverlay = <TTrack extends TimelineTrack>(
+			track: TTrack,
+		): TTrack => {
+			const hasOverlay = track.elements.some((element) =>
+				this.previewOverlay.has(element.id),
+			);
+			if (!hasOverlay) {
+				return track;
+			}
+
+			const nextElements = track.elements.map((element) => {
+				const overlay = this.previewOverlay.get(element.id);
+				return overlay
+					? ({ ...element, ...overlay } as TimelineElement)
+					: element;
+			});
+
+			return { ...track, elements: nextElements } as TTrack;
+		};
+
+		return {
+			overlay: tracks.overlay.map((track) => applyTrackOverlay(track)),
+			main: applyTrackOverlay(tracks.main),
+			audio: tracks.audio.map((track) => applyTrackOverlay(track)),
+		};
 	}
 
 	duplicateElements({
@@ -580,8 +811,27 @@ export class TimelineManager {
 	}: {
 		elements: { trackId: string; elementId: string }[];
 	}): void {
-		const command = new ToggleElementsVisibilityCommand(elements);
-		this.editor.command.execute({ command });
+		const shouldHide = elements.some(({ trackId, elementId }) => {
+			const element = this.getElementByRef({ trackId, elementId });
+			return element && canElementBeHidden(element) && !element.hidden;
+		});
+
+		const nextUpdates = elements.flatMap(({ trackId, elementId }) => {
+			const element = this.getElementByRef({ trackId, elementId });
+			if (!element || !canElementBeHidden(element)) {
+				return [];
+			}
+
+			return [
+				{
+					trackId,
+					elementId,
+					patch: { hidden: shouldHide },
+				},
+			];
+		});
+
+		this.updateElements({ updates: nextUpdates });
 	}
 
 	toggleElementsMuted({
@@ -589,12 +839,35 @@ export class TimelineManager {
 	}: {
 		elements: { trackId: string; elementId: string }[];
 	}): void {
-		const command = new ToggleElementsMutedCommand(elements);
-		this.editor.command.execute({ command });
+		const shouldMute = elements.some(({ trackId, elementId }) => {
+			const element = this.getElementByRef({ trackId, elementId });
+			return element && canElementHaveAudio(element) && !isElementMuted({ element });
+		});
+
+		const nextUpdates = elements.flatMap(({ trackId, elementId }) => {
+			const element = this.getElementByRef({ trackId, elementId });
+			if (!element || !canElementHaveAudio(element)) {
+				return [];
+			}
+
+			return [
+				{
+					trackId,
+					elementId,
+					patch: { params: { muted: shouldMute } },
+				},
+			];
+		});
+
+		this.updateElements({ updates: nextUpdates });
 	}
 
-	getTracks(): TimelineTrack[] {
-		return this.editor.scenes.getActiveScene()?.tracks ?? [];
+	getPreviewTracks(): SceneTracks | null {
+		return (
+			this.previewTracks ??
+			this.editor.scenes.getActiveSceneOrNull()?.tracks ??
+			null
+		);
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -603,10 +876,59 @@ export class TimelineManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 
-	updateTracks(newTracks: TimelineTrack[]): void {
+	private getElementByRef({
+		trackId,
+		elementId,
+	}: {
+		trackId: string;
+		elementId: string;
+	}): TimelineElement | undefined {
+		return this.getTrackById({ trackId })?.elements.find(
+			(element) => element.id === elementId,
+		);
+	}
+
+	private findTrackIdForElement({
+		elementId,
+	}: {
+		elementId: string;
+	}): string | null {
+		const activeScene = this.editor.scenes.getActiveSceneOrNull();
+		if (!activeScene) {
+			return null;
+		}
+
+		if (
+			activeScene.tracks.main.elements.some(
+				(element) => element.id === elementId,
+			)
+		) {
+			return activeScene.tracks.main.id;
+		}
+
+		for (const track of activeScene.tracks.overlay) {
+			if (track.elements.some((element) => element.id === elementId)) {
+				return track.id;
+			}
+		}
+
+		for (const track of activeScene.tracks.audio) {
+			if (track.elements.some((element) => element.id === elementId)) {
+				return track.id;
+			}
+		}
+
+		return null;
+	}
+
+	updateTracks(newTracks: SceneTracks): void {
+		this.previewOverlay.clear();
+		this.previewTracks = null;
 		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
 		this.notify();
 	}

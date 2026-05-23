@@ -1,18 +1,34 @@
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
-import type { ExportOptions, ExportResult } from "@/types/export";
+import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/lib/media/audio";
-import { formatTimeCode, getLastFrameTime } from "@/lib/time";
+import { createTimelineAudioBuffer } from "@/media/audio";
+import { formatTimecode } from "opencut-wasm";
+import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
+
+type SnapshotResult =
+	| { success: true; blob: Blob; filename: string }
+	| { success: false; error: string };
 
 export class RendererManager {
 	private renderTree: RootNode | null = null;
+	private _isDegraded = false;
 	private listeners = new Set<() => void>();
 
 	constructor(private editor: EditorCore) {}
+
+	get isDegraded(): boolean {
+		return this._isDegraded;
+	}
+
+	setDegraded(degraded: boolean): void {
+		if (this._isDegraded === degraded) return;
+		this._isDegraded = degraded;
+		this.notify();
+	}
 
 	setRenderTree({ renderTree }: { renderTree: RootNode | null }): void {
 		this.renderTree = renderTree;
@@ -24,6 +40,45 @@ export class RendererManager {
 	}
 
 	async saveSnapshot(): Promise<{ success: boolean; error?: string }> {
+		const snapshot = await this.createSnapshot();
+		if (!snapshot.success) {
+			return snapshot;
+		}
+
+		downloadBlob({ blob: snapshot.blob, filename: snapshot.filename });
+		return { success: true };
+	}
+
+	async copySnapshot(): Promise<{ success: boolean; error?: string }> {
+		if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+			return {
+				success: false,
+				error: "Clipboard image copy is not supported in this browser",
+			};
+		}
+
+		const snapshot = await this.createSnapshot();
+		if (!snapshot.success) {
+			return snapshot;
+		}
+
+		try {
+			await navigator.clipboard.write([
+				new ClipboardItem({
+					[snapshot.blob.type || "image/png"]: snapshot.blob,
+				}),
+			]);
+			return { success: true };
+		} catch (error) {
+			console.error("Copy snapshot failed:", error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : "Unknown error",
+			};
+		}
+	}
+
+	private async createSnapshot(): Promise<SnapshotResult> {
 		try {
 			const renderTree = this.getRenderTree();
 			const activeProject = this.editor.project.getActive();
@@ -38,9 +93,10 @@ export class RendererManager {
 			}
 
 			const { canvasSize, fps } = activeProject.settings;
-			const currentTime = this.editor.playback.getCurrentTime();
-			const lastFrameTime = getLastFrameTime({ duration, fps });
-			const renderTime = Math.min(currentTime, lastFrameTime);
+			const renderTime = Math.min(
+				this.editor.playback.getCurrentTime(),
+				this.editor.timeline.getLastFrameTime(),
+			);
 
 			const renderer = new CanvasRenderer({
 				width: canvasSize.width,
@@ -66,19 +122,15 @@ export class RendererManager {
 				return { success: false, error: "Failed to create image" };
 			}
 
-			const timecode = formatTimeCode({
-				timeInSeconds: renderTime,
-				fps,
-			}).replace(/:/g, "-");
-			const safeName = activeProject.metadata.name
-				.replace(/[<>:"/\\|?*]/g, "-")
-				.trim() || "snapshot";
+			const timecode = formatTimecode({ time: renderTime, rate: fps })!.replace(/:/g, "-");
+			const safeName =
+				activeProject.metadata.name.replace(/[<>:"/\\|?*]/g, "-").trim() ||
+				"snapshot";
 			const filename = `${safeName}-${timecode}.png`;
 
-			downloadBlob({ blob, filename });
-			return { success: true };
+			return { success: true, blob, filename };
 		} catch (error) {
-			console.error("Save snapshot failed:", error);
+			console.error("Snapshot capture failed:", error);
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : "Unknown error",
@@ -98,7 +150,7 @@ export class RendererManager {
 		const { format, quality, fps, includeAudio } = options;
 
 		try {
-			const tracks = this.editor.timeline.getTracks();
+			const tracks = this.editor.scenes.getActiveScene().tracks;
 			const mediaAssets = this.editor.media.getAssets();
 			const activeProject = this.editor.project.getActive();
 
@@ -111,7 +163,7 @@ export class RendererManager {
 				return { success: false, error: "Project is empty" };
 			}
 
-			const exportFps = fps || activeProject.settings.fps;
+			const exportFps = fps ?? activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
 
 			let audioBuffer: AudioBuffer | null = null;
@@ -193,6 +245,8 @@ export class RendererManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 }

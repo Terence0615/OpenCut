@@ -20,6 +20,7 @@ Thank you for your interest in contributing to OpenCut! This document provides g
 - [Bun](https://bun.sh/docs/installation)
   (for `npm` alternative)
 - [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- Rust toolchain (only needed for `apps/desktop`)
 
 > **Note:** Docker is optional, but it's essential for running the local database and Redis services. If you're planning to contribute to frontend features, you can skip the Docker setup. If you have followed the steps below in [Setup](#setup), you're all set to go!
 
@@ -44,10 +45,13 @@ Thank you for your interest in contributing to OpenCut! This document provides g
 5. Install dependencies: `bun install`
 6. Start the development server: `bun run dev`
 
-> **Note:** If you see an error like `Unsupported URL Type "workspace:*"` when running `npm install`, you have two options:
+> **Note:** Web development uses the published `opencut-wasm` package by default, so a fresh clone does not need a local WASM build.
 >
-> 1. Upgrade to a recent npm version (v9 or later), which has full workspace protocol support.
-> 2. Use an alternative package manager such as **bun** or **pnpm**.
+> If you are editing `rust/wasm`, run `bun run build:wasm`, then `cd rust/wasm/pkg && bun link`, then `cd ../../../apps/web && bun link opencut-wasm`.
+
+### Desktop setup
+
+Only needed if you're working on `apps/desktop`. See [`apps/desktop/README.md`](../apps/desktop/README.md) — it's a two-step process: Rust toolchain first via `script/setup-rust`, then desktop native dependencies via `apps/desktop/script/setup`.
 
 ## What to Focus On
 
@@ -140,6 +144,10 @@ If you're unsure whether your idea falls into the preview category, feel free to
 5. Run database migrations: `bun run db:migrate`
 6. Start the development server: `bun run dev`
 
+### Desktop
+
+Working on `apps/desktop`? See [`apps/desktop/README.md`](../apps/desktop/README.md) for setup. Web-only contributors can ignore this entirely.
+
 ## How to Contribute
 
 ### Reporting Bugs
@@ -158,16 +166,18 @@ If you're unsure whether your idea falls into the preview category, feel free to
 
 1. Create a new branch: `git checkout -b feature/your-feature-name`
 2. Make your changes
-3. Navigate to the web app directory: `cd apps/web`
-4. Run the linter: `bun run lint`
-5. Format your code: `bunx biome format --write .`
-6. Commit your changes with a descriptive message
-7. Push to your fork and create a pull request
+3. Run the relevant checks for the area you touched:
+
+   - Web changes: from `apps/web`, run `bun run lint` and `bun run format`
+   - Desktop changes: run `./apps/desktop/script/setup` if your environment isn't set up yet
+
+4. Commit your changes with a descriptive message
+5. Push to your fork and create a pull request
 
 ## Code Style
 
-- We use Biome for code formatting and linting
-- Run `bunx biome format --write .` from the `apps/web` directory to format code
+- We use ESLint for linting and Prettier for formatting
+- Run `bun run format` from the `apps/web` directory to format code
 - Run `bun run lint` from the `apps/web` directory to check for linting issues
 - Follow the existing code patterns
 

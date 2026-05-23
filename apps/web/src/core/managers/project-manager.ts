@@ -6,18 +6,16 @@ import type {
 	TProjectSortOption,
 	TProjectSettings,
 	TTimelineViewState,
-} from "@/types/project";
-import type { ExportOptions, ExportResult, ExportState } from "@/types/export";
+} from "@/project/types";
+import type { ExportOptions, ExportResult, ExportState } from "@/export";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { generateUUID } from "@/utils/id";
-import { UpdateProjectSettingsCommand } from "@/lib/commands/project";
-import {
-	DEFAULT_FPS,
-	DEFAULT_CANVAS_SIZE,
-	DEFAULT_COLOR,
-} from "@/constants/project-constants";
-import { buildDefaultScene, getProjectDurationFromScenes } from "@/lib/scenes";
+import { UpdateProjectSettingsCommand } from "@/commands/project";
+import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
+import { DEFAULT_CANVAS_SIZE } from "@/canvas/sizes";
+import { DEFAULT_FPS } from "@/fps/defaults";
+import { buildDefaultScene, getProjectDurationFromScenes } from "@/timeline/scenes";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import {
@@ -26,9 +24,11 @@ import {
 	runStorageMigrations,
 	type MigrationProgress,
 } from "@/services/storage/migrations";
-import { DEFAULT_TIMELINE_VIEW_STATE } from "@/constants/timeline-constants";
-import { loadFonts } from "@/lib/fonts/google-fonts";
-import { collectFontFamilies } from "@/lib/timeline/element-utils";
+import { loadFonts } from "@/fonts/google-fonts";
+import { DEFAULTS } from "@/timeline/defaults";
+import { getElementFontFamilies } from "@/timeline/element-utils";
+import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
+import type { MediaAsset } from "@/media/types";
 
 export interface MigrationState {
 	isMigrating: boolean;
@@ -101,10 +101,12 @@ export class ProjectManager {
 			settings: {
 				fps: DEFAULT_FPS,
 				canvasSize: DEFAULT_CANVAS_SIZE,
+				canvasSizeMode: "preset",
+				lastCustomCanvasSize: null,
 				originalCanvasSize: null,
 				background: {
 					type: "color",
-					color: DEFAULT_COLOR,
+					color: DEFAULT_BACKGROUND_COLOR,
 				},
 			},
 			version: CURRENT_PROJECT_VERSION,
@@ -161,13 +163,24 @@ export class ProjectManager {
 
 			await this.editor.media.loadProjectMedia({ projectId: id });
 
-			const allTracks = (project.scenes ?? []).flatMap((scene) => scene.tracks);
-			await loadFonts({ families: collectFontFamilies({ tracks: allTracks }) });
+			await loadFonts({
+				families: [
+					...new Set(
+						(project.scenes ?? []).flatMap((scene) =>
+							getElementFontFamilies({ tracks: scene.tracks }),
+						),
+					),
+				],
+			});
 
 			if (!project.metadata.thumbnail) {
-				const didUpdateThumbnail = await this.updateThumbnailFromTimeline();
-				if (didUpdateThumbnail) {
-					await this.saveCurrentProject();
+				try {
+					const didUpdateThumbnail = await this.updateThumbnailFromTimeline();
+					if (didUpdateThumbnail) {
+						await this.saveCurrentProject();
+					}
+				} catch (error) {
+					console.error("Failed to generate project thumbnail:", error);
 				}
 			}
 		} catch (error) {
@@ -246,14 +259,21 @@ export class ProjectManager {
 			this.notify();
 		}
 
-		await this.ensureStorageMigrations();
 		try {
-			const metadata = await storageService.loadAllProjectsMetadata();
-			this.savedProjects = metadata;
-			this.notify();
+			await this.ensureStorageMigrations();
+			try {
+				const metadata = await storageService.loadAllProjectsMetadata();
+				this.savedProjects = metadata;
+				this.notify();
+			} catch (error) {
+				console.error("Failed to load projects:", error);
+			} finally {
+				this.isLoading = false;
+				this.isInitialized = true;
+				this.notify();
+			}
 		} catch (error) {
-			console.error("Failed to load projects:", error);
-		} finally {
+			console.error("Failed to run migrations:", error);
 			this.isLoading = false;
 			this.isInitialized = true;
 			this.notify();
@@ -488,6 +508,23 @@ export class ProjectManager {
 		command.execute();
 	}
 
+	ratchetFpsForImportedMedia({
+		importedAssets,
+	}: {
+		importedAssets: Array<Pick<MediaAsset, "type" | "fps">>;
+	}): import("opencut-wasm").FrameRate | null {
+		if (!this.active) return null;
+
+		const nextFps = getRaisedProjectFpsForImportedMedia({
+			currentFps: this.active.settings.fps,
+			importedAssets,
+		});
+		if (nextFps === null) return null;
+
+		new UpdateProjectSettingsCommand({ fps: nextFps }).execute();
+		return nextFps;
+	}
+
 	async updateThumbnail({ thumbnail }: { thumbnail: string }): Promise<void> {
 		if (!this.active) return;
 
@@ -578,7 +615,7 @@ export class ProjectManager {
 	}
 
 	getTimelineViewState(): TTimelineViewState {
-		return this.active?.timelineViewState ?? DEFAULT_TIMELINE_VIEW_STATE;
+		return this.active?.timelineViewState ?? DEFAULTS.timeline.viewState;
 	}
 
 	setTimelineViewState({ viewState }: { viewState: TTimelineViewState }): void {
@@ -588,6 +625,7 @@ export class ProjectManager {
 			timelineViewState: viewState ?? undefined,
 		};
 		this.editor.save.markDirty();
+		this.notify();
 	}
 
 	getSavedProjects(): TProjectMetadata[] {
@@ -619,18 +657,15 @@ export class ProjectManager {
 	private async updateThumbnailFromTimeline(): Promise<boolean> {
 		if (!this.active) return false;
 
-		const tracks = this.editor.timeline.getTracks();
+		const tracks = this.editor.scenes.getActiveScene().tracks;
 		const mediaAssets = this.editor.media.getAssets();
 		const duration = this.editor.timeline.getTotalDuration();
-
-		if (duration === 0) return false;
-
 		const { canvasSize, background } = this.active.settings;
 
 		const scene = buildScene({
 			tracks,
 			mediaAssets,
-			duration,
+			duration: duration || 1,
 			canvasSize,
 			background,
 		});
@@ -663,7 +698,7 @@ export class ProjectManager {
 		);
 
 		if (index !== -1) {
-			this.savedProjects[index] = project.metadata;
+			this.savedProjects = this.savedProjects.with(index, project.metadata);
 		} else {
 			this.savedProjects = [project.metadata, ...this.savedProjects];
 		}
@@ -672,6 +707,8 @@ export class ProjectManager {
 	}
 
 	private notify(): void {
-		this.listeners.forEach((fn) => fn());
+		this.listeners.forEach((fn) => {
+			fn();
+		});
 	}
 }

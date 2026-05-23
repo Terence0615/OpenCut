@@ -1,24 +1,25 @@
-import { useEditor } from "@/hooks/use-editor";
-import { getElementLocalTime } from "@/lib/animation";
-import { TIME_EPSILON_SECONDS } from "@/constants/animation-constants";
+import { useEditor } from "@/editor/use-editor";
+import { getElementLocalTime } from "@/animation";
+import { addMediaTime, mediaTime, type MediaTime } from "@/wasm";
 
 export function useElementPlayhead({
 	startTime,
 	duration,
 }: {
-	startTime: number;
-	duration: number;
+	startTime: MediaTime;
+	duration: MediaTime;
 }) {
-	const editor = useEditor();
-	const playheadTime = editor.playback.getCurrentTime();
-	const localTime = getElementLocalTime({
-		timelineTime: playheadTime,
-		elementStartTime: startTime,
-		elementDuration: duration,
+	const playheadTime = useEditor((editor) => editor.playback.getCurrentTime());
+	const localTime = mediaTime({
+		ticks: getElementLocalTime({
+			timelineTime: playheadTime,
+			elementStartTime: startTime,
+			elementDuration: duration,
+		}),
 	});
 	const isPlayheadWithinElementRange =
-		playheadTime >= startTime - TIME_EPSILON_SECONDS &&
-		playheadTime <= startTime + duration + TIME_EPSILON_SECONDS;
+		playheadTime >= startTime &&
+		playheadTime <= addMediaTime({ a: startTime, b: duration });
 
 	return { localTime, isPlayheadWithinElementRange };
 }

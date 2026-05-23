@@ -1,26 +1,36 @@
-import type { TProject, TProjectMetadata } from "@/types/project";
-import { getProjectDurationFromScenes } from "@/lib/scenes";
-import type { MediaAsset } from "@/types/assets";
+import type { TProject, TProjectMetadata } from "@/project/types";
+import { getProjectDurationFromScenes } from "@/timeline/scenes";
+import type { MediaAsset } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
 import { OPFSAdapter } from "./opfs-adapter";
+import {
+	type StorageCapacityCheckResult,
+	StorageQuotaExceededError,
+	evaluateStorageCapacity,
+	isStorageQuotaExceededError,
+	readStorageQuotaStatus,
+} from "./quota";
 import type {
 	MediaAssetData,
 	StorageConfig,
 	SerializedProject,
 	SerializedScene,
 } from "./types";
-import type { SavedSoundsData, SavedSound, SoundEffect } from "@/types/sounds";
+import type { SavedSoundsData, SavedSound, SoundEffect } from "@/sounds/types";
 import {
 	migrations,
 	runStorageMigrations,
 } from "@/services/storage/migrations";
-import type { Bookmark, TimelineTrack, TScene } from "@/types/timeline";
+import type { Bookmark, SceneTracks, TScene } from "@/timeline";
+import { roundMediaTime } from "@/wasm";
 
 function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 	if (!Array.isArray(raw)) return [];
 	return raw
 		.map((item): Bookmark | null => {
-			if (typeof item === "number") return { time: item };
+			if (typeof item === "number") {
+				return { time: roundMediaTime({ time: item }) };
+			}
 			const obj = item as Record<string, unknown>;
 			if (
 				typeof obj !== "object" ||
@@ -30,10 +40,12 @@ function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 				return null;
 			}
 			return {
-				time: obj.time,
+				time: roundMediaTime({ time: obj.time }),
 				...(typeof obj.note === "string" && { note: obj.note }),
 				...(typeof obj.color === "string" && { color: obj.color }),
-				...(typeof obj.duration === "number" && { duration: obj.duration }),
+				...(typeof obj.duration === "number" && {
+					duration: roundMediaTime({ time: obj.duration }),
+				}),
 			};
 		})
 		.filter((b): b is Bookmark => b !== null);
@@ -53,17 +65,17 @@ class StorageService {
 			version: 1,
 		};
 
-		this.projectsAdapter = new IndexedDBAdapter<SerializedProject>(
-			this.config.projectsDb,
-			"projects",
-			this.config.version,
-		);
+		this.projectsAdapter = new IndexedDBAdapter<SerializedProject>({
+			dbName: this.config.projectsDb,
+			storeName: "projects",
+			version: this.config.version,
+		});
 
-		this.savedSoundsAdapter = new IndexedDBAdapter<SavedSoundsData>(
-			this.config.savedSoundsDb,
-			"saved-sounds",
-			this.config.version,
-		);
+		this.savedSoundsAdapter = new IndexedDBAdapter<SavedSoundsData>({
+			dbName: this.config.savedSoundsDb,
+			storeName: "saved-sounds",
+			version: this.config.version,
+		});
 	}
 
 	private async ensureMigrations(): Promise<void> {
@@ -79,32 +91,44 @@ class StorageService {
 	}
 
 	private getProjectMediaAdapters({ projectId }: { projectId: string }) {
-		const mediaMetadataAdapter = new IndexedDBAdapter<MediaAssetData>(
-			`${this.config.mediaDb}-${projectId}`,
-			"media-metadata",
-			this.config.version,
-		);
+		const mediaMetadataAdapter = new IndexedDBAdapter<MediaAssetData>({
+			dbName: `${this.config.mediaDb}-${projectId}`,
+			storeName: "media-metadata",
+			version: this.config.version,
+		});
 
 		const mediaAssetsAdapter = new OPFSAdapter(`media-files-${projectId}`);
 
 		return { mediaMetadataAdapter, mediaAssetsAdapter };
 	}
 
-	private stripAudioBuffers({
-		tracks,
+	async canStoreFile({
+		size,
 	}: {
-		tracks: TimelineTrack[];
-	}): TimelineTrack[] {
-		return tracks.map((track) => {
-			if (track.type !== "audio") return track;
-			return {
+		size: number;
+	}): Promise<StorageCapacityCheckResult> {
+		const quotaStatus = await readStorageQuotaStatus();
+		return evaluateStorageCapacity({
+			requiredBytes: size,
+			quotaStatus,
+		});
+	}
+
+	isQuotaExceededError({ error }: { error: unknown }): boolean {
+		return isStorageQuotaExceededError({ error });
+	}
+
+	private stripAudioBuffers({ tracks }: { tracks: SceneTracks }): SceneTracks {
+		return {
+			...tracks,
+			audio: tracks.audio.map((track) => ({
 				...track,
 				elements: track.elements.map((element) => {
 					const { buffer: _buffer, ...rest } = element;
 					return rest;
 				}),
-			};
-		});
+			})),
+		};
 	}
 
 	async saveProject({ project }: { project: TProject }): Promise<void> {
@@ -137,7 +161,10 @@ class StorageService {
 			timelineViewState: project.timelineViewState,
 		};
 
-		await this.projectsAdapter.set(project.metadata.id, serializedProject);
+		await this.projectsAdapter.set({
+			key: project.metadata.id,
+			value: serializedProject,
+		});
 	}
 
 	async loadProject({
@@ -150,16 +177,25 @@ class StorageService {
 
 		if (!serializedProject) return null;
 
+		if (
+			typeof serializedProject !== "object" ||
+			serializedProject === null ||
+			typeof serializedProject.metadata !== "object" ||
+			serializedProject.metadata === null
+		) {
+			console.warn(
+				"[storage] Skipping malformed project entry (missing metadata):",
+				{ id, entry: serializedProject },
+			);
+			return null;
+		}
+
 		const scenes =
 			serializedProject.scenes?.map((scene) => ({
 				id: scene.id,
 				name: scene.name,
 				isMain: scene.isMain,
-				tracks: (scene.tracks ?? []).map((track) =>
-					track.type === "video"
-						? { ...track, isMain: track.isMain ?? false } // legacy: isMain was optional
-						: track,
-				),
+				tracks: scene.tracks,
 				bookmarks: normalizeBookmarks({ raw: scene.bookmarks }),
 				createdAt: new Date(scene.createdAt),
 				updatedAt: new Date(scene.updatedAt),
@@ -170,9 +206,11 @@ class StorageService {
 				id: serializedProject.metadata.id,
 				name: serializedProject.metadata.name,
 				thumbnail: serializedProject.metadata.thumbnail,
-				duration:
-					serializedProject.metadata.duration ??
-					getProjectDurationFromScenes({ scenes }),
+				duration: roundMediaTime({
+					time:
+						serializedProject.metadata.duration ??
+						getProjectDurationFromScenes({ scenes }),
+				}),
 				createdAt: new Date(serializedProject.metadata.createdAt),
 				updatedAt: new Date(serializedProject.metadata.updatedAt),
 			},
@@ -206,18 +244,36 @@ class StorageService {
 		await this.ensureMigrations();
 		const serializedProjects = await this.projectsAdapter.getAll();
 
-		const metadata = serializedProjects.map((serializedProject) => ({
-			id: serializedProject.metadata.id,
-			name: serializedProject.metadata.name,
-			thumbnail: serializedProject.metadata.thumbnail,
-			duration:
-				serializedProject.metadata.duration ??
-				getProjectDurationFromScenes({
-					scenes: (serializedProject.scenes ?? []) as unknown as TScene[],
+		const metadata: TProjectMetadata[] = [];
+		for (const serializedProject of serializedProjects) {
+			if (
+				typeof serializedProject !== "object" ||
+				serializedProject === null ||
+				typeof serializedProject.metadata !== "object" ||
+				serializedProject.metadata === null
+			) {
+				console.warn(
+					"[storage] Skipping malformed project entry (missing metadata):",
+					serializedProject,
+				);
+				continue;
+			}
+
+			metadata.push({
+				id: serializedProject.metadata.id,
+				name: serializedProject.metadata.name,
+				thumbnail: serializedProject.metadata.thumbnail,
+				duration: roundMediaTime({
+					time:
+						serializedProject.metadata.duration ??
+						getProjectDurationFromScenes({
+							scenes: (serializedProject.scenes ?? []) as unknown as TScene[],
+						}),
 				}),
-			createdAt: new Date(serializedProject.metadata.createdAt),
-			updatedAt: new Date(serializedProject.metadata.updatedAt),
-		}));
+				createdAt: new Date(serializedProject.metadata.createdAt),
+				updatedAt: new Date(serializedProject.metadata.updatedAt),
+			});
+		}
 
 		return metadata.sort(
 			(a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
@@ -238,8 +294,6 @@ class StorageService {
 		const { mediaMetadataAdapter, mediaAssetsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		await mediaAssetsAdapter.set(mediaAsset.id, mediaAsset.file);
-
 		const metadata: MediaAssetData = {
 			id: mediaAsset.id,
 			name: mediaAsset.name,
@@ -253,7 +307,30 @@ class StorageService {
 			ephemeral: mediaAsset.ephemeral,
 		};
 
-		await mediaMetadataAdapter.set(mediaAsset.id, metadata);
+		try {
+			await mediaAssetsAdapter.set({
+				key: mediaAsset.id,
+				value: mediaAsset.file,
+			});
+			await mediaMetadataAdapter.set({
+				key: mediaAsset.id,
+				value: metadata,
+			});
+		} catch (error) {
+			try {
+				await mediaAssetsAdapter.remove(mediaAsset.id);
+			} catch {
+				// Ignore cleanup failures so the original storage error is preserved.
+			}
+
+			if (this.isQuotaExceededError({ error })) {
+				throw new StorageQuotaExceededError({
+					requiredBytes: mediaAsset.file.size,
+				});
+			}
+
+			throw error;
+		}
 	}
 
 	async loadMediaAsset({
@@ -433,7 +510,10 @@ class StorageService {
 				lastModified: new Date().toISOString(),
 			};
 
-			await this.savedSoundsAdapter.set("user-sounds", updatedData);
+			await this.savedSoundsAdapter.set({
+				key: "user-sounds",
+				value: updatedData,
+			});
 		} catch (error) {
 			console.error("Failed to save sound effect:", error);
 			throw error;
@@ -449,7 +529,10 @@ class StorageService {
 				lastModified: new Date().toISOString(),
 			};
 
-			await this.savedSoundsAdapter.set("user-sounds", updatedData);
+			await this.savedSoundsAdapter.set({
+				key: "user-sounds",
+				value: updatedData,
+			});
 		} catch (error) {
 			console.error("Failed to remove saved sound:", error);
 			throw error;

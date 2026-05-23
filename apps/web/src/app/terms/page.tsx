@@ -7,7 +7,7 @@ import {
 	AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Separator } from "@/components/ui/separator";
-import { SOCIAL_LINKS } from "@/constants/site-constants";
+import { SOCIAL_LINKS } from "@/site/social";
 
 export const metadata: Metadata = {
 	title: "Terms of Service - OpenCut",
@@ -41,28 +41,30 @@ export default function TermsPage() {
 						</h3>
 						<ol className="list-decimal space-y-2 pl-6">
 							<li>
-								Your content stays private - basic editing is local, AI features
-								use encrypted uploads
+								Everything runs locally in your browser - nothing is ever
+								uploaded to our servers
 							</li>
 							<li>
-								We never claim ownership of your content, even when processing
-								AI features
+								We never claim ownership of your content
 							</li>
 							<li>
 								Free for personal and commercial use with no watermarks or
 								restrictions
 							</li>
-							<li>Don't use OpenCut for illegal activities or harassment</li>
 							<li>
-								Service provided "as is" - we can't guarantee perfect uptime
+								You&apos;re responsible for how you use it - don&apos;t break
+								the law
+							</li>
+							<li>
+								Service provided &quot;as is&quot; - we can&apos;t guarantee
+								perfect uptime
 							</li>
 							<li>
 								Open source means you can review our code and self-host if
 								needed
 							</li>
 							<li>
-								You can delete your account anytime and keep using your exported
-								videos
+								No account required - your exported videos are always yours
 							</li>
 						</ol>
 						<p className="mt-4">
@@ -81,21 +83,17 @@ export default function TermsPage() {
 			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Your Content, Your Rights</h2>
 				<p>
-					<strong>You own everything you create.</strong> OpenCut processes
-					basic editing locally on your device. For AI features, content is
-					encrypted before upload and we cannot access your original files. We
-					make no claims to ownership, licensing, or rights over your videos,
-					projects, or any content you create using OpenCut.
+					<strong>You own everything you create.</strong> All editing and
+					processing happens locally on your device. We never see, store, or
+					have access to your files. We make no claims to ownership, licensing,
+					or rights over your videos, projects, or any content you create using
+					OpenCut.
 				</p>
 				<ul className="list-disc space-y-2 pl-6">
 					<li>
-						Your content remains private and under your control at all times
+						Your content never leaves your device
 					</li>
 					<li>You retain all intellectual property rights to your content</li>
-					<li>
-						Even when using AI features, we cannot access your unencrypted
-						content
-					</li>
 					<li>You can export and use your content however you choose</li>
 					<li>No watermarks, no licensing restrictions from OpenCut</li>
 				</ul>
@@ -115,53 +113,26 @@ export default function TermsPage() {
 					</li>
 				</ul>
 				<p>
-					<strong>What we ask:</strong> Don't use OpenCut for illegal
-					activities, harassment, or creating harmful content. Be respectful of
-					others and follow applicable laws.
+					You&apos;re responsible for how you use OpenCut and the content you
+					create. Don&apos;t use it for anything illegal in your jurisdiction.
 				</p>
 			</section>
 
 			<section className="flex flex-col gap-3">
-				<h2 className="text-2xl font-semibold">
-					AI Features and Data Processing
-				</h2>
+				<h2 className="text-2xl font-semibold">AI Features</h2>
 				<p>
-					OpenCut offers optional AI-powered features that require server
-					processing:
-				</p>
-				<ul className="list-disc space-y-2 pl-6">
-					<li>
-						AI features (auto captions, content analysis, etc.) are completely
-						optional
-					</li>
-					<li>Your content is encrypted on your device before any upload</li>
-					<li>
-						We use zero-knowledge encryption - we cannot decrypt your content
-					</li>
-					<li>Encrypted content is deleted immediately after processing</li>
-					<li>
-						You maintain full ownership and control of your content throughout
-					</li>
-				</ul>
-				<p>
-					By using AI features, you consent to the temporary, encrypted
-					processing of your content as described in our Privacy Policy. You can
-					always choose to use only local editing features.
+					AI features like auto captions run entirely in your browser using
+					on-device models. No content is uploaded to any server. These features
+					are optional - you can use OpenCut without them.
 				</p>
 			</section>
 
 			<section className="flex flex-col gap-3">
-				<h2 className="text-2xl font-semibold">Account and Service</h2>
-				<p>To use certain features, you may create an account:</p>
-				<ul className="list-disc space-y-2 pl-6">
-					<li>Provide accurate information when signing up</li>
-					<li>Keep your account secure and don't share credentials</li>
-					<li>You're responsible for activity under your account</li>
-					<li>You can delete your account at any time</li>
-				</ul>
+				<h2 className="text-2xl font-semibold">Service</h2>
 				<p>
-					OpenCut is provided "as is" without warranties. While we strive for
-					reliability, we can't guarantee uninterrupted service.
+					OpenCut does not currently require an account. The service is provided
+					&quot;as is&quot; without warranties. While we strive for
+					reliability, we can&apos;t guarantee uninterrupted service.
 				</p>
 			</section>
 
@@ -179,7 +150,7 @@ export default function TermsPage() {
 					<a
 						href={SOCIAL_LINKS.github}
 						target="_blank"
-						rel="noopener"
+						rel="noopener noreferrer"
 						className="text-primary hover:underline"
 					>
 						GitHub
@@ -189,35 +160,17 @@ export default function TermsPage() {
 			</section>
 
 			<section className="flex flex-col gap-3">
-				<h2 className="text-2xl font-semibold">Third-Party Content</h2>
-				<p>
-					When using OpenCut, make sure you have the right to use any content
-					you import:
-				</p>
-				<ul className="list-disc space-y-2 pl-6">
-					<li>Only upload content you own or have permission to use</li>
-					<li>
-						Respect copyright, trademarks, and other intellectual property
-					</li>
-					<li>
-						Don't use copyrighted music, images, or videos without permission
-					</li>
-					<li>You're responsible for any claims related to your content</li>
-				</ul>
-			</section>
-
-			<section className="flex flex-col gap-3">
 				<h2 className="text-2xl font-semibold">Limitations and Liability</h2>
 				<p>
 					OpenCut is provided free of charge. To the extent permitted by law:
 				</p>
 				<ul className="list-disc space-y-2 pl-6">
-					<li>We're not liable for any loss of data or content</li>
+					<li>We&apos;re not liable for any loss of data or content</li>
 					<li>
 						Projects are stored in your browser and may be lost if you clear
 						browser data
 					</li>
-					<li>We're not responsible for how you use the service</li>
+					<li>We&apos;re not responsible for how you use the service</li>
 					<li>Our liability is limited to the maximum extent allowed by law</li>
 				</ul>
 				<p>
@@ -231,7 +184,7 @@ export default function TermsPage() {
 				<h2 className="text-2xl font-semibold">Service Changes</h2>
 				<p>We may update OpenCut and these terms:</p>
 				<ul className="list-disc space-y-2 pl-6">
-					<li>We'll notify you of significant changes to these terms</li>
+					<li>We&apos;ll notify you of significant changes to these terms</li>
 					<li>Continued use means you accept any updates</li>
 					<li>You can always self-host an older version if you prefer</li>
 					<li>Major changes will be discussed with the community on GitHub</li>
@@ -239,13 +192,10 @@ export default function TermsPage() {
 			</section>
 
 			<section className="flex flex-col gap-3">
-				<h2 className="text-2xl font-semibold">Termination</h2>
+				<h2 className="text-2xl font-semibold">Stopping Use</h2>
 				<p>You can stop using OpenCut at any time:</p>
 				<ul className="list-disc space-y-2 pl-6">
-					<li>Delete your account through your profile settings</li>
 					<li>Clear your browser data to remove local projects</li>
-					<li>Your content remains yours even if you stop using OpenCut</li>
-					<li>We may suspend accounts for violations of these terms</li>
 				</ul>
 			</section>
 
@@ -257,7 +207,7 @@ export default function TermsPage() {
 					<a
 						href={`${SOCIAL_LINKS.github}/issues`}
 						target="_blank"
-						rel="noopener"
+						rel="noopener noreferrer"
 						className="text-primary hover:underline"
 					>
 						GitHub repository
@@ -273,7 +223,7 @@ export default function TermsPage() {
 					<a
 						href={SOCIAL_LINKS.x}
 						target="_blank"
-						rel="noopener"
+						rel="noopener noreferrer"
 						className="text-primary hover:underline"
 					>
 						X (Twitter)
@@ -288,7 +238,7 @@ export default function TermsPage() {
 			</section>
 			<Separator />
 			<p className="text-muted-foreground text-sm">
-				Last updated: July 14, 2025
+				Last updated: March 15, 2026
 			</p>
 		</BasePage>
 	);

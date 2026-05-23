@@ -1,9 +1,14 @@
-import type { CanvasRenderer } from "../canvas-renderer";
-import { resolveStickerId } from "@/lib/stickers";
-import { VisualNode, type VisualNodeParams } from "./visual-node";
+import { resolveStickerId } from "@/stickers";
+import {
+	VisualNode,
+	type ResolvedVisualSourceNodeState,
+	type VisualNodeParams,
+} from "./visual-node";
 
 export interface StickerNodeParams extends VisualNodeParams {
 	stickerId: string;
+	intrinsicWidth?: number;
+	intrinsicHeight?: number;
 }
 
 interface CachedStickerSource {
@@ -14,7 +19,11 @@ interface CachedStickerSource {
 
 const stickerSourceCache = new Map<string, Promise<CachedStickerSource>>();
 
-function loadStickerSource(stickerId: string): Promise<CachedStickerSource> {
+export function loadStickerSource({
+	stickerId,
+}: {
+	stickerId: string;
+}): Promise<CachedStickerSource> {
 	const cached = stickerSourceCache.get(stickerId);
 	if (cached) return cached;
 
@@ -33,36 +42,18 @@ function loadStickerSource(stickerId: string): Promise<CachedStickerSource> {
 			image.src = url;
 		});
 
-		return { source: image, width: 200, height: 200 };
+		return {
+			source: image,
+			width: image.naturalWidth,
+			height: image.naturalHeight,
+		};
 	})();
 
 	stickerSourceCache.set(stickerId, promise);
 	return promise;
 }
 
-export class StickerNode extends VisualNode<StickerNodeParams> {
-	private cachedSource: Promise<CachedStickerSource>;
-
-	constructor(params: StickerNodeParams) {
-		super(params);
-		this.cachedSource = loadStickerSource(params.stickerId);
-	}
-
-	async render({ renderer, time }: { renderer: CanvasRenderer; time: number }) {
-		await super.render({ renderer, time });
-
-		if (!this.isInRange({ time })) {
-			return;
-		}
-
-		const { source, width, height } = await this.cachedSource;
-
-		this.renderVisual({
-			renderer,
-			source,
-			sourceWidth: width,
-			sourceHeight: height,
-			timelineTime: time,
-		});
-	}
-}
+export class StickerNode extends VisualNode<
+	StickerNodeParams,
+	ResolvedVisualSourceNodeState
+> {}

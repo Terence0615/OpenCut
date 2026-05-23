@@ -1,14 +1,14 @@
-import type { MediaType } from "@/types/assets";
+import type { MediaType } from "@/media/types";
 import type {
 	TProject,
 	TProjectMetadata,
 	TTimelineViewState,
-} from "@/types/project";
-import type { TScene } from "@/types/timeline";
+} from "@/project/types";
+import type { TScene } from "@/timeline";
 
 export interface StorageAdapter<T> {
 	get(key: string): Promise<T | null>;
-	set(key: string, value: T): Promise<void>;
+	set(args: { key: string; value: T }): Promise<void>;
 	remove(key: string): Promise<void>;
 	list(): Promise<string[]>;
 	clear(): Promise<void>;
@@ -24,6 +24,7 @@ export interface MediaAssetData {
 	height?: number;
 	duration?: number;
 	fps?: number;
+	hasAudio?: boolean;
 	ephemeral?: boolean;
 	thumbnailUrl?: string;
 }
